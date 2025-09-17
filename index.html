@@ -484,7 +484,10 @@
         function renderPipelines() {
             state.transactions.forEach(t => {
                 const container = document.getElementById(`${t.name.toLowerCase()}-pipeline`);
-                container.innerHTML = t.history.map(op => {
+                let pipelineHTML = "";
+                const history = t.history;
+
+                history.forEach((op, index) => {
                     const opMap = {
                         START: { icon: 'fa-play', text: 'Start', color: 'bg-gray-400' },
                         READ: { icon: 'fa-eye', text: `Read(${op.details})`, color: 'bg-blue-400' },
@@ -497,13 +500,19 @@
                     };
                     const opInfo = opMap[op.type] || { icon: 'fa-question', text: '?', color: 'bg-gray-300' };
 
-                    return `
+                    pipelineHTML += `
                         <div class="op-block flex flex-col items-center justify-center text-white p-2 rounded-lg shadow-md w-24 h-14 ${opInfo.color}">
                             <i class="fas ${opInfo.icon} text-lg"></i>
                             <span class="text-xs font-semibold mt-1">${opInfo.text}</span>
                         </div>
                     `;
-                }).join('');
+                    
+                    if (index < history.length - 1) {
+                         pipelineHTML += `<div class="text-2xl text-slate-400 flex-shrink-0"><i class="fas fa-long-arrow-alt-right"></i></div>`;
+                    }
+                });
+                
+                container.innerHTML = pipelineHTML;
                 container.scrollLeft = container.scrollWidth;
             });
             renderPipelineArrows();
