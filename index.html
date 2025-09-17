@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador de Concorrência em Banco de Dados</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .log-message {
+            transition: all 0.3s ease-in-out;
+            padding: 6px 10px;
+            border-radius: 6px;
+            margin-bottom: 6px;
+        }
+        .log-message:first-child {
+            transform: translateY(-5px);
+            opacity: 1;
+        }
+        ol {
+            list-style-type: decimal;
+            padding-left: 20px;
+        }
+        li {
+            margin-bottom: 8px;
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800">
+
+    <div id="app" class="container mx-auto p-4 sm:p-6 lg:p-8">
+
+        <!-- Cabeçalho -->
+        <header class="text-center mb-8">
+            <h1 class="text-3xl sm:text-4xl font-bold text-slate-900">Simulador Web de Concorrência</h1>
+            <p class="text-md sm:text-lg text-slate-600 mt-2">Entendendo Deadlocks, Lost Updates e Bloqueios</p>
+        </header>
+
+        <!-- Seletor de Modo -->
+        <div class="flex justify-center items-center mb-6 bg-slate-200 p-2 rounded-xl max-w-lg mx-auto">
+            <button id="mode-locking" class="w-1/2 px-4 py-2 text-center font-semibold rounded-lg transition-colors duration-300">
+                <i class="fas fa-lock mr-2"></i>Deadlock & Locks
+            </button>
+            <button id="mode-lost-update" class="w-1/2 px-4 py-2 text-center font-semibold rounded-lg transition-colors duration-300">
+                <i class="fas fa-exclamation-triangle mr-2"></i>Lost Update
+            </button>
+        </div>
+
+        <!-- Painel Explicativo -->
+        <div id="explanation-panel" class="bg-white p-6 rounded-lg shadow-md mb-8 transition-all duration-500">
+            <!-- Conteúdo dinâmico aqui -->
+        </div>
+
+        <main class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Coluna Principal (Simulação) -->
+            <div class="lg:col-span-2 space-y-8">
+                
+                <!-- Contas Bancárias -->
+                <section>
+                    <h2 class="text-2xl font-bold mb-4 border-b-2 border-slate-300 pb-2">
+                        <i class="fas fa-database mr-2 text-blue-600"></i>Contas Bancárias
+                    </h2>
+                    <div id="accounts-container" class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                        <!-- Contas geradas via JS -->
+                    </div>
+                </section>
+
+                <!-- Painel de Controle de Transferência -->
+                 <section class="bg-white p-6 rounded-lg shadow-md">
+                     <h3 class="text-xl font-bold mb-4 text-slate-700">Controle de Transferência</h3>
+                     <div class="flex items-center space-x-4">
+                         <label for="transfer-amount" class="font-semibold">Valor a Transferir/Depositar (R$):</label>
+                         <input type="text" id="transfer-amount" value="100" class="w-32 p-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition">
+                         <button id="reset-button" class="ml-auto bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-transform transform hover:scale-105">
+                             <i class="fas fa-sync-alt mr-2"></i>Resetar
+                         </button>
+                     </div>
+                 </section>
+
+                <!-- Sessões de Clientes -->
+                <section class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div id="t1-container" class="bg-white p-6 rounded-lg shadow-md"></div>
+                    <div id="t2-container" class="bg-white p-6 rounded-lg shadow-md"></div>
+                </section>
+            </div>
+
+            <!-- Coluna do Log -->
+            <aside class="lg:col-span-1 bg-white p-6 rounded-lg shadow-md">
+                <h2 class="text-2xl font-bold mb-4 border-b-2 border-slate-300 pb-2">
+                    <i class="fas fa-stream mr-2 text-green-600"></i>Log de Eventos
+                </h2>
+                <div id="log-container" class="h-96 overflow-y-auto bg-slate-50 p-3 rounded-md text-sm">
+                    <!-- Mensagens do log aqui -->
+                </div>
+            </aside>
+        </main>
+
+        <footer class="text-center mt-8 py-4">
+            <p class="text-slate-500 text-sm">Criado por Prof. Gabriel Duarte</p>
+        </footer>
+
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+
+        // --- ENUMS e CONSTANTES ---
+        const LockType = { SHARED: 'SHARED', EXCLUSIVE: 'EXCLUSIVE' };
+        const T_State = { IDLE: 'IDLE', ACTIVE: 'ACTIVE', WAITING: 'WAITING', COMMITTED: 'COMMITTED', ABORTED: 'ABORTED' };
+        const SimMode = { LOCKING: 'LOCKING', LOST_UPDATE: 'LOST_UPDATE' };
+
+        // --- ESTADO DA APLICAÇÃO ---
+        let state = {
+            simMode: SimMode.LOCKING,
+            initialValues: { 'Conta C': 1000.00, 'Conta P': 500.00 },
+            dataItems: {},
+            transactions: [],
+            logMessages: [],
+            deadlockCheckInterval: null
+        };
+
+        // --- CLASSES DA SIMULAÇÃO (LÓGICA) ---
+        class Transaction {
+            constructor(name, color) {
+                this.name = name;
+                this.color = color;
+                this.state = T_State.IDLE;
+                this.locksHeld = {}; // { itemName: lockType }
+                this.waitingFor = null; // { item, lockType }
+                this.pendingOp = null;
+                // Para o Lost Update
+                this.localValue = null; 
+            }
+            reset() {
+                this.state = T_State.IDLE;
+                this.locksHeld = {};
+                this.waitingFor = null;
+                this.pendingOp = null;
+                this.localValue = null;
+            }
+        }
+        
+        // --- FUNÇÕES DE INICIALIZAÇÃO ---
+        function init() {
+            // Inicializa contas
+            for (const name in state.initialValues) {
+                state.dataItems[name] = {
+                    name,
+                    value: state.initialValues[name],
+                    lockType: null,
+                    holders: new Set()
+                };
+            }
+            // Inicializa transações
+            state.transactions = [new Transaction('T1', 'blue'), new Transaction('T2', 'green')];
+            
+            setupEventListeners();
+            log("Simulador iniciado. Escolha um modo de simulação.", "purple");
+            setSimMode(SimMode.LOCKING); 
+            renderAll();
+        }
+
+        function setupEventListeners() {
+            document.getElementById('mode-locking').addEventListener('click', () => setSimMode(SimMode.LOCKING));
+            document.getElementById('mode-lost-update').addEventListener('click', () => setSimMode(SimMode.LOST_UPDATE));
+            document.getElementById('reset-button').addEventListener('click', resetSimulation);
+        }
+
+        // --- LÓGICA DE MODO DE SIMULAÇÃO ---
+        const explanations = {
+            [SimMode.LOCKING]: {
+                title: "Modo 1: Controle com Locks & Deadlock",
+                desc: `
+                    <p class="mb-4">Este modo simula um sistema que usa <strong>bloqueios (locks)</strong> para garantir a consistência. Uma transação precisa de um 'lock' exclusivo para alterar um dado, o que impede que duas transações alterem a mesma informação ao mesmo tempo.</p>
+                    <p class="mb-4">O <strong>Deadlock</strong> (impasse) acontece quando duas ou mais transações ficam presas numa espera circular: T1 espera por um recurso que T2 possui, e T2 espera por um recurso que T1 possui. Nenhuma pode continuar.</p>
+                    <h4 class="font-bold text-slate-700 mb-2">Como Criar um Deadlock (Passo a Passo):</h4>
+                    <ol class="space-y-2 text-sm">
+                        <li><strong>Inicie as Transações:</strong> Clique em "Iniciar" para T1 e depois para T2.</li>
+                        <li><strong>Inicie a Transferência de T1:</strong> Clique em <strong>"Transf. C -> P"</strong>. T1 vai adquirir um lock na 'Conta C' e ficará esperando o lock na 'Conta P'.</li>
+                        <li><strong>Inicie a Transferência de T2:</strong> Clique em <strong>"Transf. P -> C"</strong>. T2 vai adquirir um lock na 'Conta P' e ficará esperando o lock na 'Conta C'.</li>
+                        <li><strong>DEADLOCK!</strong> Agora, T1 espera por T2 e T2 espera por T1. Aguarde um instante e veja o sistema detectar o ciclo, escolher uma transação "vítima" e abortá-la para resolver o impasse.</li>
+                    </ol>
+                `
+            },
+            [SimMode.LOST_UPDATE]: {
+                title: "Modo 2: Problema da Atualização Perdida",
+                desc: `
+                    <p class="mb-4">Neste modo, os locks estão <strong>desativados</strong>. Ambas as transações podem ler o mesmo valor ao mesmo tempo e operar com base nessa informação, mesmo que ela já esteja desatualizada.</p>
+                    <h4 class="font-bold text-slate-700 mb-2">Como Causar uma Atualização Perdida:</h4>
+                     <ol class="space-y-2 text-sm">
+                        <li><strong>Inicie as Transações:</strong> Clique em "Iniciar" para T1 e T2.</li>
+                        <li><strong>Leitura Concorrente:</strong> Clique em <strong>"Ler Saldo C"</strong> para T1. Depois, clique em <strong>"Ler Saldo C"</strong> para T2. Ambas leram o mesmo valor inicial (ex: R$ 1000).</li>
+                        <li><strong>Depósitos Concorrentes:</strong> Defina um valor (ex: R$ 100). Clique em <strong>"Depositar em C"</strong> para T1. O saldo será 1100. Agora, clique em <strong>"Depositar em C"</strong> para T2.</li>
+                        <li><strong>ERRO!</strong> T2 também calcula 1000 + 100 = 1100. O depósito de T1 foi "perdido". O saldo correto deveria ser R$ 1200, mas será R$ 1100.</li>
+                    </ol>
+                `
+            }
+        };
+
+        function setSimMode(mode) {
+            state.simMode = mode;
+            document.getElementById('mode-locking').classList.toggle('bg-blue-600', mode === SimMode.LOCKING);
+            document.getElementById('mode-locking').classList.toggle('text-white', mode === SimMode.LOCKING);
+            document.getElementById('mode-lost-update').classList.toggle('bg-red-600', mode === SimMode.LOST_UPDATE);
+            document.getElementById('mode-lost-update').classList.toggle('text-white', mode === SimMode.LOST_UPDATE);
+            
+            const panel = document.getElementById('explanation-panel');
+            panel.innerHTML = `
+                <h3 class="text-xl font-bold mb-2 text-slate-800">${explanations[mode].title}</h3>
+                <div class="text-slate-600">${explanations[mode].desc}</div>
+            `;
+
+            if(mode === SimMode.LOCKING) {
+                state.deadlockCheckInterval = setInterval(detectAndResolveDeadlock, 1500);
+            } else {
+                clearInterval(state.deadlockCheckInterval);
+                state.deadlockCheckInterval = null;
+            }
+            resetSimulation(false); // Soft reset
+        }
+
+        // --- FUNÇÕES DE RENDERIZAÇÃO (ATUALIZAÇÃO DA UI) ---
+        function renderAll() {
+            renderAccounts();
+            renderTransactionPanels();
+            renderLog();
+        }
+
+        function renderAccounts() {
+            const container = document.getElementById('accounts-container');
+            container.innerHTML = '';
+            for (const name in state.dataItems) {
+                const item = state.dataItems[name];
+                let lockInfo = '';
+                if (state.simMode === SimMode.LOCKING && item.lockType) {
+                    const holders = Array.from(item.holders).map(t => t.name).join(',');
+                    lockInfo = `<div class="absolute top-2 right-2 text-xs font-bold text-red-600 bg-red-100 px-2 py-1 rounded-full">
+                        <i class="fas fa-lock"></i> ${item.lockType.slice(0,1)} por ${holders}
+                    </div>`;
+                }
+                const accountEl = document.createElement('div');
+                accountEl.className = 'bg-slate-50 p-6 rounded-lg shadow-inner relative';
+                accountEl.innerHTML = `
+                    <h3 class="text-xl font-bold text-slate-800">${item.name}</h3>
+                    <p class="text-3xl font-light text-blue-700 mt-2">R$ ${item.value.toFixed(2)}</p>
+                    ${lockInfo}
+                `;
+                container.appendChild(accountEl);
+            }
+        }
+
+        function renderTransactionPanels() {
+            state.transactions.forEach(t => {
+                const container = document.getElementById(`${t.name.toLowerCase()}-container`);
+                const isLockingMode = state.simMode === SimMode.LOCKING;
+                
+                const stateMap = {
+                    [T_State.IDLE]: { text: 'Inativa', color: 'text-slate-500' },
+                    [T_State.ACTIVE]: { text: 'Ativa', color: 'text-green-600' },
+                    [T_State.WAITING]: { text: 'Aguardando Lock', color: 'text-orange-500' },
+                    [T_State.COMMITTED]: { text: 'Finalizada', color: 'text-blue-700' },
+                    [T_State.ABORTED]: { text: 'Cancelada', color: 'text-red-700' },
+                };
+
+                let localValueInfo = '';
+                if(state.simMode === SimMode.LOST_UPDATE && t.localValue !== null) {
+                    localValueInfo = `<div class="text-sm text-slate-500 mt-1">Valor lido localmente: R$ ${t.localValue.toFixed(2)}</div>`;
+                }
+
+                container.innerHTML = `
+                    <h3 class="text-xl font-bold text-${t.color}-600">Sessão Cliente ${t.name}</h3>
+                    <p class="font-semibold mt-2">Estado: <span class="font-bold ${stateMap[t.state].color}">${stateMap[t.state].text}</span></p>
+                    ${localValueInfo}
+                    <div class="mt-4 space-y-2">
+                        ${generateButtons(t)}
+                    </div>
+                `;
+            });
+            // Adiciona event listeners aos botões recém-criados
+            state.transactions.forEach(t => {
+                 document.querySelectorAll(`[data-t-name="${t.name}"]`).forEach(btn => {
+                    btn.addEventListener('click', (e) => handleButtonClick(e.currentTarget.dataset));
+                 });
+            });
+            updateButtonStates();
+        }
+
+        function generateButtons(t) {
+            const isLockingMode = state.simMode === SimMode.LOCKING;
+            const transferLabel = t.name === 'T1' ? 'Transf. C -> P' : 'Transf. P -> C';
+            const depositLabel = 'Depositar em C';
+            const readLabel = 'Ler Saldo C';
+            
+            return `
+                <div class="flex space-x-2">
+                    <button data-t-name="${t.name}" data-action="start" class="w-full bg-${t.color}-500 hover:bg-${t.color}-600 btn">Iniciar</button>
+                    <button data-t-name="${t.name}" data-action="commit" class="w-full bg-green-500 hover:bg-green-600 btn">Commit</button>
+                    <button data-t-name="${t.name}" data-action="abort" class="w-full bg-red-500 hover:bg-red-600 btn">Abort</button>
+                </div>
+                 <button data-t-name="${t.name}" data-action="${isLockingMode ? 'transfer' : 'read'}" class="w-full bg-${t.color}-200 text-${t.color}-800 hover:bg-${t.color}-300 btn-secondary">
+                    ${isLockingMode ? transferLabel : readLabel}
+                 </button>
+                 ${!isLockingMode ? `<button data-t-name="${t.name}" data-action="deposit" class="w-full bg-${t.color}-200 text-${t.color}-800 hover:bg-${t.color}-300 btn-secondary">${depositLabel}</button>` : ''}
+            `.replaceAll('btn"', 'btn text-white font-bold py-2 px-4 rounded-lg shadow disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"');
+        }
+
+        function updateButtonStates() {
+             state.transactions.forEach(t => {
+                const isActive = t.state === T_State.ACTIVE || t.state === T_State.WAITING;
+                const canOperate = t.state === T_State.ACTIVE && !t.pendingOp;
+                
+                document.querySelector(`[data-t-name="${t.name}"][data-action="start"]`).disabled = isActive;
+                document.querySelector(`[data-t-name="${t.name}"][data-action="commit"]`).disabled = !isActive;
+                document.querySelector(`[data-t-name="${t.name}"][data-action="abort"]`).disabled = !isActive;
+                
+                const transferBtn = document.querySelector(`[data-t-name="${t.name}"][data-action="transfer"]`);
+                if(transferBtn) transferBtn.disabled = !canOperate;
+
+                const readBtn = document.querySelector(`[data-t-name="${t.name}"][data-action="read"]`);
+                if(readBtn) readBtn.disabled = !canOperate || t.localValue !== null;
+
+                const depositBtn = document.querySelector(`[data-t-name="${t.name}"][data-action="deposit"]`);
+                if(depositBtn) depositBtn.disabled = !canOperate || t.localValue === null;
+            });
+        }
+        
+        function renderLog() {
+            const container = document.getElementById('log-container');
+            container.innerHTML = state.logMessages.map(msg => {
+                const colorMap = {
+                    black: 'bg-slate-200 text-slate-800',
+                    green: 'bg-green-100 text-green-800',
+                    red: 'bg-red-100 text-red-800',
+                    orange: 'bg-orange-100 text-orange-800',
+                    blue: 'bg-blue-100 text-blue-800',
+                    purple: 'bg-purple-100 text-purple-800',
+                };
+                return `<div class="log-message ${colorMap[msg.color] || colorMap.black}">${msg.text}</div>`;
+            }).join('');
+        }
+        
+        // --- LÓGICA DE CONTROLE E AÇÕES ---
+
+        function handleButtonClick(dataset) {
+            const { tName, action } = dataset;
+            const t = state.transactions.find(tr => tr.name === tName);
+
+            // Funções de ação
+            const actions = {
+                start: () => { t.reset(); t.state = T_State.ACTIVE; log(`${t.name} iniciada.`); },
+                commit: () => { releaseLocks(t); t.state = T_State.COMMITTED; log(`${t.name} commitada.`, 'green'); },
+                abort: () => { releaseLocks(t); t.reset(); log(`${t.name} abortada.`, 'red'); },
+                transfer: () => initiateTransfer(t),
+                read: () => { // Ação para modo Lost Update
+                    t.localValue = state.dataItems['Conta C'].value;
+                    log(`${t.name} leu o saldo da Conta C: R$ ${t.localValue.toFixed(2)}`, t.color);
+                },
+                deposit: () => { // Ação para modo Lost Update
+                    const amount = getTransferAmount();
+                    if(amount === null) return;
+                    log(`${t.name} calculou novo saldo: R$ ${(t.localValue + amount).toFixed(2)} e escreveu.`, t.color);
+                    state.dataItems['Conta C'].value = t.localValue + amount; // A atualização perdida acontece aqui
+                    t.localValue = null;
+                }
+            };
+            
+            if (actions[action]) {
+                actions[action]();
+                renderAll();
+            }
+        }
+        
+        function getTransferAmount() {
+            const input = document.getElementById('transfer-amount');
+            const amount = parseFloat(input.value);
+            if(isNaN(amount) || amount <= 0) {
+                log("Valor inválido para a operação.", 'red');
+                return null;
+            }
+            return amount;
+        }
+
+        function log(message, color = 'black') {
+            const timestamp = new Date().toLocaleTimeString('pt-BR');
+            state.logMessages.unshift({ text: `[${timestamp}] ${message}`, color });
+            if(state.logMessages.length > 50) state.logMessages.pop();
+            renderLog();
+        }
+
+        function resetSimulation(fullReset = true) {
+            log("--- Simulador Resetado ---", "purple");
+            clearInterval(state.deadlockCheckInterval);
+            if(state.simMode === SimMode.LOCKING) {
+                state.deadlockCheckInterval = setInterval(detectAndResolveDeadlock, 1500);
+            }
+            state.transactions.forEach(t => t.reset());
+            for (const name in state.initialValues) {
+                state.dataItems[name].value = state.initialValues[name];
+                state.dataItems[name].lockType = null;
+                state.dataItems[name].holders.clear();
+            }
+            if (fullReset) {
+                 state.logMessages = [];
+                 log("Simulador iniciado. Escolha um modo de simulação.", "purple");
+            }
+            renderAll();
+        }
+        
+        // --- LÓGICA ESPECÍFICA DE TRANSFERÊNCIA E LOCKS ---
+
+        function initiateTransfer(t) {
+            const amount = getTransferAmount();
+            if(amount === null) return;
+
+            const [fromAcc, toAcc] = (t.name === 'T1') ? ['Conta C', 'Conta P'] : ['Conta P', 'Conta C'];
+            
+            if(state.dataItems[fromAcc].value < amount) {
+                log(`Saldo insuficiente em ${fromAcc} para transferir R$${amount.toFixed(2)}.`, 'red');
+                return;
+            }
+
+            log(`${t.name} inicia transf. R$${amount.toFixed(2)} de ${fromAcc} para ${toAcc}`, t.color);
+            t.pendingOp = { step: 'step2', fromAcc, toAcc, amount };
+            requestLock(t, fromAcc, LockType.EXCLUSIVE);
+        }
+
+        function update() {
+            // Este update é chamado quando um lock é concedido
+            state.transactions.forEach(t => {
+                if(t.state === T_State.ACTIVE && t.pendingOp) {
+                    const { step, fromAcc, toAcc, amount } = t.pendingOp;
+
+                    if(step === 'step2' && t.locksHeld[fromAcc]) {
+                        t.pendingOp.step = 'execute';
+                        requestLock(t, toAcc, LockType.EXCLUSIVE);
+                    } else if(step === 'execute' && t.locksHeld[fromAcc] && t.locksHeld[toAcc]) {
+                        log(`${t.name} obteve todos os locks. Executando transferência.`, 'green');
+                        state.dataItems[fromAcc].value -= amount;
+                        state.dataItems[toAcc].value += amount;
+                        t.pendingOp = null;
+                    }
+                }
+            });
+            renderAll();
+        }
+        
+        function requestLock(transaction, itemName, lockType) {
+            if (state.simMode !== SimMode.LOCKING) return;
+            
+            const item = state.dataItems[itemName];
+
+            // Já possui lock suficiente?
+            if(transaction.locksHeld[itemName] === LockType.EXCLUSIVE) return true;
+            if(transaction.locksHeld[itemName] === LockType.SHARED && lockType === LockType.SHARED) return true;
+
+            const canGrant = (item.lockType === null) ||
+                             (item.lockType === LockType.SHARED && lockType === LockType.SHARED && item.holders.size === 1 && item.holders.has(transaction));
+
+
+            if (canGrant) {
+                grantLock(transaction, item, lockType);
+            } else {
+                log(`Conflito! ${transaction.name} esperando por ${itemName}`, 'orange');
+                transaction.state = T_State.WAITING;
+                transaction.waitingFor = { item, lockType };
+            }
+            renderAll();
+        }
+        
+        function grantLock(transaction, item, lockType) {
+            log(`Lock ${lockType} em ${item.name} concedido a ${transaction.name}`, transaction.color);
+            item.holders.add(transaction);
+            transaction.locksHeld[item.name] = lockType;
+            if (lockType === LockType.EXCLUSIVE || item.lockType === LockType.EXCLUSIVE) {
+                item.lockType = LockType.EXCLUSIVE;
+            } else {
+                item.lockType = LockType.SHARED;
+            }
+            
+            if (transaction.state === T_State.WAITING) {
+                transaction.state = T_State.ACTIVE;
+                transaction.waitingFor = null;
+            }
+            update(); // Checa se operações pendentes podem continuar
+        }
+
+        function releaseLocks(transaction) {
+            if (state.simMode !== SimMode.LOCKING) return;
+            
+            Object.keys(transaction.locksHeld).forEach(itemName => {
+                const item = state.dataItems[itemName];
+                item.holders.delete(transaction);
+                if (item.holders.size === 0) {
+                    item.lockType = null;
+                } else if (Array.from(item.holders).every(h => h.locksHeld[itemName] === LockType.SHARED)) {
+                     item.lockType = LockType.SHARED;
+                }
+            });
+            transaction.locksHeld = {};
+
+            // Acorda transações em espera
+            Object.values(state.dataItems).forEach(item => checkWaitingTransactions(item));
+        }
+
+        function checkWaitingTransactions(item) {
+            state.transactions.forEach(t => {
+                if (t.state === T_State.WAITING && t.waitingFor && t.waitingFor.item.name === item.name) {
+                     log(`Reavaliando ${t.name} para ${item.name}`, 'black');
+                     t.state = T_State.ACTIVE;
+                     requestLock(t, t.waitingFor.item.name, t.waitingFor.lockType);
+                }
+            });
+        }
+
+        function detectAndResolveDeadlock() {
+            const waitsFor = {};
+            state.transactions.forEach(t => {
+                if (t.state === T_State.WAITING) {
+                    waitsFor[t.name] = Array.from(t.waitingFor.item.holders).map(h => h.name);
+                }
+            });
+
+            for (const startNode in waitsFor) {
+                const path = [startNode];
+                let toVisit = waitsFor[startNode] ? [...waitsFor[startNode]] : [];
+                
+                const visitedInPath = new Set([startNode]);
+
+                while(toVisit.length > 0) {
+                    const currentNode = toVisit.pop();
+                    if(visitedInPath.has(currentNode)) continue;
+
+                    if (currentNode === startNode) { // Ciclo!
+                        const cyclePath = path.slice(path.indexOf(startNode));
+                        const victimName = cyclePath.sort().pop();
+                        const victim = state.transactions.find(t => t.name === victimName);
+
+                        log(`DEADLOCK: Ciclo de espera detectado: ${cyclePath.join(' -> ')} -> ${startNode}`, 'red');
+                        log(`Estratégia: Abortar a transação com maior nome no ciclo.`, 'purple');
+                        log(`Resolvendo... Abortando ${victim.name} (vítima).`, 'red');
+                        
+                        releaseLocks(victim);
+                        victim.reset();
+                        renderAll();
+                        return;
+                    }
+
+                    if (waitsFor[currentNode]) {
+                        path.push(currentNode);
+                        visitedInPath.add(currentNode);
+                        toVisit.push(...waitsFor[currentNode]);
+                    }
+                }
+            }
+        }
+
+        // --- INICIALIZAÇÃO DA APLICAÇÃO ---
+        init();
+    });
+    </script>
+
+</body>
+</html>
+
+
