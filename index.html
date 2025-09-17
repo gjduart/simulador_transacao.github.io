@@ -40,6 +40,10 @@
             animation: slideIn 0.3s ease forwards;
             flex-shrink: 0; /* Impede que os blocos encolham */
         }
+        .error-highlight {
+            background-color: #fef2f2 !important; /* light red */
+            border: 2px solid #ef4444; /* red-500 */
+        }
     </style>
 </head>
 <body class="bg-slate-100 text-slate-800">
@@ -145,8 +149,8 @@
 
                 <!-- Sessões de Clientes -->
                 <section class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div id="t1-container" class="bg-white p-6 rounded-lg shadow-md"></div>
-                    <div id="t2-container" class="bg-white p-6 rounded-lg shadow-md"></div>
+                    <div id="t1-container" class="bg-white p-6 rounded-lg shadow-md transition-colors duration-300"></div>
+                    <div id="t2-container" class="bg-white p-6 rounded-lg shadow-md transition-colors duration-300"></div>
                 </section>
             </div>
 
@@ -203,6 +207,7 @@
                 this.pendingOp = null;
                 this.history = []; // Para o pipeline
                 this.localValue = null; 
+                this.hasError = false; // Para destacar painel com erro
             }
             reset() {
                 this.state = T_State.IDLE;
@@ -211,6 +216,7 @@
                 this.pendingOp = null;
                 this.history = [];
                 this.localValue = null;
+                this.hasError = false;
             }
         }
         
@@ -277,10 +283,10 @@
                      <h4 class="font-bold text-slate-700 mb-2">Como Causar uma Leitura Suja:</h4>
                      <ol>
                          <li><strong>Inicie T1:</strong> Clique em "Iniciar" para T1.</li>
-                         <li><strong>T1 Altera Dado:</strong> Clique em <strong>"Update Saldo C (sem commit)"</strong> para T1. O valor na tela mudará, mas não está salvo.</li>
+                         <li><strong>T1 Altera Dado:</strong> Clique em <strong>"Update Saldo C (sem commit)"</strong> para T1. O valor na tela mudará para <strong class="text-orange-500">laranja</strong>, indicando um dado "sujo".</li>
                          <li><strong>Inicie T2 e Leia o Dado Sujo:</strong> Inicie T2 e clique em <strong>"Ler Saldo C"</strong>. T2 lerá o valor alterado, mas não confirmado.</li>
                          <li><strong>T1 Desfaz a Operação:</strong> Clique em <strong>"Abort"</strong> para T1. A alteração é desfeita.</li>
-                         <li><strong>ERRO!</strong> T2 agora está operando com base em um valor que foi revertido, um dado "fantasma".</li>
+                         <li><strong>ERRO!</strong> O painel de T2 ficará <strong class="text-red-500">vermelho</strong>, pois agora ela opera com base em um valor inválido.</li>
                      </ol>
                 `
             },
@@ -294,7 +300,7 @@
                          <li><strong>Primeira Leitura de T1:</strong> Clique em <strong>"1ª Leitura Saldo C"</strong> para T1. Anote o valor lido.</li>
                          <li><strong>T2 Altera e Confirma:</strong> Clique em <strong>"Update & Commit Saldo C"</strong> para T2. O valor da conta é alterado permanentemente.</li>
                          <li><strong>Segunda Leitura de T1:</strong> Clique em <strong>"2ª Leitura Saldo C"</strong> para T1.</li>
-                         <li><strong>ERRO!</strong> T1 leu dois valores diferentes para o mesmo dado dentro da mesma transação, quebrando a consistência.</li>
+                         <li><strong>ERRO!</strong> T1 leu dois valores diferentes para o mesmo dado. O painel de T1 ficará <strong class="text-red-500">vermelho</strong> para indicar a inconsistência.</li>
                      </ol>
                 `
             },
@@ -319,7 +325,7 @@
             document.querySelectorAll('.mode-btn').forEach(btn => {
                 const isActive = btn.dataset.mode === mode;
                 btn.classList.toggle('bg-blue-600', isActive && mode === 'LOCKING');
-                btn.classList.toggle('bg-red-600', isActive && (mode === 'LOST_UPDATE' || mode === 'DIRTY_READ' || mode === 'UNREPEATABLE_READ' || mode === 'PHANTOM_READ'));
+                btn.classList.toggle('bg-red-600', isActive && (mode !== 'LOCKING'));
                 btn.classList.toggle('text-white', isActive);
             });
             
@@ -365,7 +371,6 @@
                 const accountEl = document.createElement('div');
                 accountEl.className = 'bg-slate-50 p-6 rounded-lg shadow-inner relative';
                 
-                // No Dirty Read, mostra o valor temporário
                 const displayValue = (state.simMode === SimMode.DIRTY_READ && item.value !== item.tempValue) ? item.tempValue : item.value;
                 const valueClass = (displayValue !== item.value) ? 'text-orange-500' : 'text-blue-700';
 
@@ -381,6 +386,8 @@
         function renderTransactionPanels() {
             state.transactions.forEach(t => {
                 const container = document.getElementById(`${t.name.toLowerCase()}-container`);
+                container.classList.toggle('error-highlight', t.hasError);
+
                 const stateMap = {
                     [T_State.IDLE]: { text: 'Inativa', color: 'text-slate-500' },
                     [T_State.ACTIVE]: { text: 'Ativa', color: 'text-green-600' },
@@ -394,10 +401,18 @@
                     localValueInfo = `<div class="text-sm text-slate-500 mt-1">Valor lido localmente: R$ ${t.localValue.toFixed(2)}</div>`;
                 }
 
+                let errorInfo = '';
+                if (t.hasError) {
+                    errorInfo = `<div class="mt-2 text-sm font-bold text-red-600 p-2 bg-red-50 rounded-lg">
+                                    <i class="fas fa-exclamation-circle mr-2"></i>Esta transação está inconsistente!
+                                 </div>`;
+                }
+
                 container.innerHTML = `
                     <h3 class="text-xl font-bold text-${t.color}-600">Sessão Cliente ${t.name}</h3>
                     <p class="font-semibold mt-2">Estado: <span class="font-bold ${stateMap[t.state].color}">${stateMap[t.state].text}</span></p>
                     ${localValueInfo}
+                    ${errorInfo}
                     <div class="mt-4 space-y-2">
                         ${generateButtons(t)}
                     </div>
@@ -452,12 +467,19 @@
              state.transactions.forEach(t => {
                 const isActive = t.state === T_State.ACTIVE || t.state === T_State.WAITING;
                 const canOperate = t.state === T_State.ACTIVE && !t.pendingOp;
+
+                if (t.hasError) {
+                    document.querySelectorAll(`[data-t-name="${t.name}"]`).forEach(btn => {
+                        if (btn.dataset.action !== 'start') btn.disabled = true;
+                    });
+                     document.querySelector(`[data-t-name="${t.name}"][data-action="start"]`).disabled = true;
+                    return;
+                }
                 
                 document.querySelector(`[data-t-name="${t.name}"][data-action="start"]`).disabled = isActive;
                 document.querySelector(`[data-t-name="${t.name}"][data-action="commit"]`).disabled = !isActive;
                 document.querySelector(`[data-t-name="${t.name}"][data-action="abort"]`).disabled = !isActive;
                 
-                // Botões específicos de cada modo
                 const actions = ['transfer', 'read', 'deposit', 'update_no_commit', 'read1', 'read2', 'update_commit'];
                 actions.forEach(action => {
                     const btn = document.querySelector(`[data-t-name="${t.name}"][data-action="${action}"]`);
@@ -562,7 +584,8 @@
                 // Lost Update
                 read: () => {
                     t.localValue = (state.simMode === SimMode.DIRTY_READ) ? state.dataItems['Conta C'].tempValue : state.dataItems['Conta C'].value;
-                    log(`${t.name} leu o saldo da Conta C: R$ ${t.localValue.toFixed(2)}`, t.color);
+                    if(state.simMode === SimMode.DIRTY_READ) log(`${t.name} leu o saldo "sujo" da Conta C: R$ ${t.localValue.toFixed(2)}`, t.color);
+                    else log(`${t.name} leu o saldo da Conta C: R$ ${t.localValue.toFixed(2)}`, t.color);
                     logOperation(t, 'READ', 'C');
                 },
                 deposit: () => {
@@ -589,7 +612,8 @@
                     const currentValue = state.dataItems['Conta C'].value;
                     log(`${t.name} (2ª Leitura) Saldo C é: R$ ${currentValue.toFixed(2)}`, t.color);
                      if (currentValue !== t.localValue) {
-                        log(`LEITURA NÃO-REPETÍVEL! Valor mudou de R$ ${t.localValue.toFixed(2)} para R$ ${currentValue.toFixed(2)}`, 'red');
+                        t.hasError = true;
+                        log(`ERRO DE LEITURA NÃO-REPETÍVEL! Valor mudou de R$ ${t.localValue.toFixed(2)} para R$ ${currentValue.toFixed(2)}`, 'red');
                     }
                     logOperation(t, 'READ', 'C');
                 },
@@ -670,7 +694,13 @@
                 log(`${t.name} abortada pelo usuário.`, 'red');
              }
              if (state.simMode === SimMode.DIRTY_READ && t.name === 'T1') {
-                state.dataItems['Conta C'].tempValue = state.dataItems['Conta C'].value;
+                const originalValue = state.dataItems['Conta C'].value;
+                state.dataItems['Conta C'].tempValue = originalValue;
+                const t2 = state.transactions.find(tr => tr.name === 'T2');
+                if (t2.localValue !== null && t2.localValue !== originalValue) {
+                    t2.hasError = true;
+                    log(`ERRO DE LEITURA SUJA! T2 leu R$ ${t2.localValue.toFixed(2)}, mas o valor foi revertido para R$ ${originalValue.toFixed(2)}.`, 'red');
+                }
              }
              logOperation(t, 'ABORT');
              releaseLocks(t); 
