@@ -91,13 +91,18 @@
             <!-- Coluna Principal (Simulação) -->
             <div class="lg:col-span-2 space-y-8">
                 
-                <!-- Contas Bancárias -->
+                <!-- Dados do Banco -->
                 <section>
                     <h2 class="text-2xl font-bold mb-4 border-b-2 border-slate-300 pb-2">
                         <i class="fas fa-database mr-2 text-blue-600"></i>Dados do Banco
                     </h2>
-                    <div id="accounts-container" class="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                        <!-- Contas geradas via JS -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                        <div id="accounts-container" class="grid grid-cols-1 gap-6">
+                           <!-- Contas geradas via JS -->
+                        </div>
+                        <div id="query-container" class="hidden">
+                            <!-- Container para a simulação de query -->
+                        </div>
                     </div>
                 </section>
 
@@ -188,7 +193,7 @@
         // --- ESTADO DA APLICAÇÃO ---
         let state = {
             simMode: SimMode.LOCKING,
-            initialValues: { 'Conta C': 1000.00, 'Conta P': 500.00 },
+            initialValues: { 'Conta C': 1000.00, 'Conta P': 400.00 }, // Conta P < 450 para Phantom Read
             dataItems: {},
             transactions: [],
             logMessages: [],
@@ -222,17 +227,15 @@
         
         // --- FUNÇÕES DE INICIALIZAÇÃO ---
         function init() {
-            // Inicializa contas
             for (const name in state.initialValues) {
                 state.dataItems[name] = {
                     name,
                     value: state.initialValues[name],
-                    tempValue: state.initialValues[name], // Para Dirty Read
+                    tempValue: state.initialValues[name],
                     lockType: null,
                     holders: new Set()
                 };
             }
-            // Inicializa transações
             state.transactions = [new Transaction('T1', 'blue'), new Transaction('T2', 'green')];
             
             setupEventListeners();
@@ -252,7 +255,7 @@
         const explanations = {
             [SimMode.LOCKING]: {
                 title: "Problema 1: Deadlock",
-                desc: `
+                problem: `
                     <p class="mb-4">O <strong>Deadlock</strong> (impasse) acontece quando duas ou mais transações ficam presas numa espera circular: T1 espera por um recurso que T2 possui, e T2 espera por um recurso que T1 possui. Nenhuma pode continuar.</p>
                     <h4 class="font-bold text-slate-700 mb-2">Como Criar um Deadlock (Passo a Passo):</h4>
                     <ol>
@@ -261,11 +264,19 @@
                         <li><strong>Inicie a Transferência de T2:</strong> Clique em <strong>"Transf. P -> C"</strong>. T2 vai adquirir um lock na 'Conta P'.</li>
                         <li><strong>DEADLOCK!</strong> Agora, o sistema tentará automaticamente continuar as transferências. T1 precisa da 'Conta P' (bloqueada por T2) e T2 precisa da 'Conta C' (bloqueada por T1). Aguarde o alerta!</li>
                     </ol>
+                `,
+                solution: `
+                     <h4 class="font-bold text-slate-700 mb-2">Como os SGBDs Solucionam:</h4>
+                     <p class="mb-2">Sistemas de Gerenciamento de Banco de Dados (SGBDs) usam duas abordagens principais:</p>
+                     <ul class="list-disc pl-5 space-y-2 text-sm">
+                         <li><strong>Detecção e Resolução (Mais Comum):</strong> O SGBD mantém um grafo de esperas (<em>waits-for graph</em>), exatamente como este simulador. Periodicamente, ele verifica se existem ciclos nesse grafo. Ao encontrar um ciclo (um deadlock), ele escolhe uma das transações como "vítima", a aborta (fazendo um rollback) e libera seus locks, permitindo que as outras prossigam.</li>
+                         <li><strong>Prevenção:</strong> Alguns sistemas tentam prevenir o deadlock. Uma técnica comum é a <strong>ordenação de locks</strong>, onde todas as transações devem solicitar locks sobre os recursos (tabelas, linhas) sempre na mesma ordem. Isso torna um ciclo de espera matematicamente impossível.</li>
+                     </ul>
                 `
             },
             [SimMode.LOST_UPDATE]: {
-                title: "Problema 2: Atualização Perdida (Lost Update)",
-                desc: `
+                title: "Problema 2: Atualização Perdida",
+                problem: `
                     <p class="mb-4">Ocorre quando duas transações leem o mesmo dado e, em seguida, o atualizam. A segunda atualização sobrescreve a primeira, fazendo com que a primeira atualização seja "perdida".</p>
                     <h4 class="font-bold text-slate-700 mb-2">Como Causar uma Atualização Perdida:</h4>
                      <ol>
@@ -274,11 +285,20 @@
                         <li><strong>Depósitos Concorrentes:</strong> Defina um valor (ex: R$ 100). Clique em <strong>"Depositar em C"</strong> para T1. O saldo será 1100. Agora, clique em <strong>"Depositar em C"</strong> para T2.</li>
                         <li><strong>ERRO!</strong> T2 também calcula 1000 + 100 = 1100. O depósito de T1 foi "perdido". O saldo correto deveria ser R$ 1200.</li>
                     </ol>
+                `,
+                solution: `
+                    <h4 class="font-bold text-slate-700 mb-2">Como os SGBDs Solucionam:</h4>
+                     <p class="mb-2">A solução padrão é o uso de <strong>locks pessimistas</strong>. O primeiro <code>UPDATE</code> (ou um <code>SELECT ... FOR UPDATE</code>) em um dado coloca um <strong>lock de escrita (Exclusivo)</strong> sobre ele.</p>
+                     <ul class="list-disc pl-5 space-y-2 text-sm">
+                         <li>Quando T1 executa o <code>UPDATE</code>, ela bloqueia a 'Conta C'.</li>
+                         <li>Quando T2 tenta executar o seu <code>UPDATE</code>, ela é forçada a <strong>esperar</strong> até que T1 finalize (com um commit ou abort) e libere o lock.</li>
+                         <li>Só então T2 pode prosseguir, lendo o novo valor (R$ 1100) e aplicando sua atualização, resultando no valor correto de R$ 1200.</li>
+                     </ul>
                 `
             },
             [SimMode.DIRTY_READ]: {
-                title: "Problema 3: Leitura Suja (Dirty Read)",
-                desc: `
+                title: "Problema 3: Leitura Suja",
+                problem: `
                      <p class="mb-4">Ocorre quando uma transação (T2) lê dados que foram modificados por outra transação (T1) que ainda <strong>não foi confirmada</strong> (commit). Se T1 for revertida (abort), T2 terá lido dados "sujos" que nunca existiram oficialmente.</p>
                      <h4 class="font-bold text-slate-700 mb-2">Como Causar uma Leitura Suja:</h4>
                      <ol>
@@ -288,11 +308,20 @@
                          <li><strong>T1 Desfaz a Operação:</strong> Clique em <strong>"Abort"</strong> para T1. A alteração é desfeita.</li>
                          <li><strong>ERRO!</strong> O painel de T2 ficará <strong class="text-red-500">vermelho</strong>, pois agora ela opera com base em um valor inválido.</li>
                      </ol>
+                `,
+                solution: `
+                    <h4 class="font-bold text-slate-700 mb-2">Como os SGBDs Solucionam:</h4>
+                     <p class="mb-2">Este problema é resolvido pelo nível de isolamento padrão na maioria dos SGBDs: <strong><code>READ COMMITTED</code></strong>.</p>
+                     <p class="text-sm">Neste nível, uma transação <strong>não consegue enxergar</strong> as alterações feitas por outras transações que ainda não foram commitadas. Em um SGBD real, quando T2 tentasse ler a 'Conta C' (que T1 modificou), uma de duas coisas aconteceria:</p>
+                     <ul class="list-disc pl-5 space-y-2 text-sm">
+                         <li>O SGBD faria T2 <strong>esperar</strong> até T1 dar commit ou abort.</li>
+                         <li>Ou, mais comumente, o SGBD manteria uma <strong>versão antiga</strong> do dado e a entregaria para T2, garantindo que ela só veja dados confirmados (consistentes).</li>
+                     </ul>
                 `
             },
             [SimMode.UNREPEATABLE_READ]: {
                 title: "Problema 4: Leitura Não-Repetível",
-                desc: `
+                problem: `
                      <p class="mb-4">Ocorre quando uma transação (T1) lê o mesmo dado duas vezes, mas obtém resultados diferentes porque outra transação (T2) alterou e confirmou esse dado entre as duas leituras de T1.</p>
                      <h4 class="font-bold text-slate-700 mb-2">Como Causar uma Leitura Não-Repetível:</h4>
                      <ol>
@@ -302,20 +331,39 @@
                          <li><strong>Segunda Leitura de T1:</strong> Clique em <strong>"2ª Leitura Saldo C"</strong> para T1.</li>
                          <li><strong>ERRO!</strong> T1 leu dois valores diferentes para o mesmo dado. O painel de T1 ficará <strong class="text-red-500">vermelho</strong> para indicar a inconsistência.</li>
                      </ol>
+                `,
+                solution: `
+                    <h4 class="font-bold text-slate-700 mb-2">Como os SGBDs Solucionam:</h4>
+                     <p class="mb-2">Este problema é resolvido por um nível de isolamento mais alto: <strong><code>REPEATABLE READ</code></strong>.</p>
+                     <p class="text-sm">Quando T1 executa sua primeira leitura, o SGBD coloca um <strong>lock de leitura (Compartilhado)</strong> na 'Conta C'. Diferente do <code>READ COMMITTED</code>, esse lock é <strong>mantido até o final da transação T1</strong>.</p>
+                     <ul class="list-disc pl-5 space-y-2 text-sm">
+                         <li>Quando T2 tenta executar seu <code>UPDATE</code>, ela precisa de um lock de escrita (Exclusivo), que é incompatível com o lock de leitura de T1.</li>
+                         <li>Portanto, T2 é forçada a <strong>esperar</strong> até que T1 termine. Isso garante que T1 sempre veja a mesma "fotografia" dos dados do início ao fim de sua execução.</li>
+                     </ul>
                 `
             },
             [SimMode.PHANTOM_READ]: {
-                 title: "Problema 5: Leitura Fantasma (Phantom Read)",
-                 desc: `
-                     <p class="mb-4">É uma variação da Leitura Não-Repetível. Ocorre quando uma transação executa uma consulta baseada em um critério (ex: <code>SELECT * FROM contas WHERE saldo > 400</code>) duas vezes. Entre as duas execuções, outra transação insere (ou remove) uma nova linha que satisfaz o critério.</p>
-                     <p>A primeira consulta retorna um conjunto de linhas. A segunda consulta retorna o mesmo conjunto <strong>mais a nova linha "fantasma"</strong>. Isso quebra a consistência, pois o conjunto de dados mudou.</p>
-                      <h4 class="font-bold text-slate-700">Simulação Conceitual:</h4>
-                     <p>Este simulador não adiciona/remove contas, mas podemos imaginar o cenário:</p>
+                 title: "Problema 5: Leitura Fantasma",
+                 problem: `
+                     <p class="mb-4">Ocorre quando uma transação (T1) executa uma consulta que retorna um <strong>conjunto de linhas</strong> duas vezes. Entre as duas execuções, outra transação (T2) insere uma nova linha que satisfaz o critério da consulta de T1.</p>
+                     <h4 class="font-bold text-slate-700 mb-2">Como Causar uma Leitura Fantasma:</h4>
                       <ol>
-                         <li>T1 executa: <code>SELECT COUNT(*) FROM contas</code>. Resultado: 2.</li>
-                         <li>T2 executa: <code>INSERT INTO contas...</code> e dá commit.</li>
-                         <li>T1 executa de novo: <code>SELECT COUNT(*) FROM contas</code>. Resultado: 3. A "conta fantasma" apareceu.</li>
+                         <li><strong>Inicie T1 e T2.</strong></li>
+                         <li><strong>1ª Contagem de T1:</strong> Clique em <strong>"1ª Contagem Clientes Ricos"</strong> para T1. Ele contará quantos clientes têm saldo > R$ 450.</li>
+                         <li><strong>T2 Cria um Novo "Rico":</strong> Clique em <strong>"Tornar Conta P 'Rica' & Commit"</strong> para T2. Isso aumenta o saldo da Conta P, fazendo-a corresponder ao critério.</li>
+                         <li><strong>2ª Contagem de T1:</strong> Clique em <strong>"2ª Contagem Clientes Ricos"</strong> para T1.</li>
+                         <li><strong>ERRO!</strong> T1 agora encontra um resultado diferente. Um cliente "fantasma" apareceu, quebrando a consistência da visão de T1.</li>
                      </ol>
+                 `,
+                 solution: `
+                    <h4 class="font-bold text-slate-700 mb-2">Como os SGBDs Solucionam:</h4>
+                     <p class="mb-2">Este problema é o mais difícil de resolver e exige o nível de isolamento mais alto: <strong><code>SERIALIZABLE</code></strong>.</p>
+                     <p class="text-sm">Neste nível, o SGBD não apenas bloqueia as linhas que são lidas, mas também utiliza uma técnica chamada <strong>travamento de intervalo de chave (key-range locking)</strong>. Ele bloqueia o "intervalo" definido pela cláusula <code>WHERE</code>.</p>
+                     <ul class="list-disc pl-5 space-y-2 text-sm">
+                         <li>Quando T1 executa a consulta <code>WHERE saldo > 450</code>, o SGBD bloqueia esse intervalo.</li>
+                         <li>Quando T2 tenta inserir (ou atualizar) uma nova linha que cairia nesse intervalo (ex: alterar o saldo para R$ 600), ela é impedida e forçada a <strong>esperar</strong>.</li>
+                         <li>Isso garante que nenhuma linha "fantasma" possa aparecer ou desaparecer enquanto T1 estiver ativa, fazendo com que a execução seja equivalente a uma execução serial.</li>
+                     </ul>
                  `
             }
         };
@@ -330,9 +378,20 @@
             });
             
             const panel = document.getElementById('explanation-panel');
+            const explanation = explanations[mode];
             panel.innerHTML = `
-                <h3 class="text-xl font-bold mb-2 text-slate-800">${explanations[mode].title}</h3>
-                <div class="text-slate-600">${explanations[mode].desc}</div>
+                <div class="flex border-b border-slate-200 mb-4">
+                    <button data-tab="problem" class="tab-btn py-2 px-4 font-semibold border-b-2">O Problema</button>
+                    <button data-tab="solution" class="tab-btn py-2 px-4 font-semibold border-b-2">A Solução do SGBD</button>
+                </div>
+                <div id="problem-content" class="tab-content text-slate-600">
+                     <h3 class="text-xl font-bold mb-2 text-slate-800">${explanation.title}</h3>
+                     ${explanation.problem}
+                </div>
+                <div id="solution-content" class="hidden tab-content text-slate-600">
+                     <h3 class="text-xl font-bold mb-2 text-slate-800">Solução para ${explanation.title.split(':')[1]}</h3>
+                     ${explanation.solution}
+                </div>
             `;
 
             clearInterval(state.deadlockCheckInterval);
@@ -345,20 +404,40 @@
                 state.deadlockCheckInterval = null;
                 state.mainUpdateInterval = null;
             }
+
+            panel.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const tab = e.currentTarget.dataset.tab;
+                    panel.querySelectorAll('.tab-content').forEach(content => content.classList.add('hidden'));
+                    panel.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('text-blue-600', 'border-blue-600'));
+                    
+                    document.getElementById(`${tab}-content`).classList.remove('hidden');
+                    e.currentTarget.classList.add('text-blue-600', 'border-blue-600');
+                });
+            });
+            panel.querySelector('[data-tab="problem"]').click();
+
             resetSimulation(false);
         }
 
         // --- FUNÇÕES DE RENDERIZAÇÃO ---
         function renderAll() {
-            renderAccounts();
+            renderAccountsAndQuery();
             renderTransactionPanels();
             renderPipelines();
             renderLog();
         }
 
-        function renderAccounts() {
-            const container = document.getElementById('accounts-container');
-            container.innerHTML = '';
+        function renderAccountsAndQuery() {
+            const accountsContainer = document.getElementById('accounts-container');
+            const queryContainer = document.getElementById('query-container');
+            accountsContainer.innerHTML = '';
+            
+            const isPhantomMode = state.simMode === SimMode.PHANTOM_READ;
+            queryContainer.classList.toggle('hidden', !isPhantomMode);
+            accountsContainer.classList.toggle('sm:grid-cols-2', !isPhantomMode);
+
+
             for (const name in state.dataItems) {
                 const item = state.dataItems[name];
                 let lockInfo = '';
@@ -379,7 +458,18 @@
                     <p class="text-3xl font-light ${valueClass} mt-2">R$ ${displayValue.toFixed(2)}</p>
                     ${lockInfo}
                 `;
-                container.appendChild(accountEl);
+                accountsContainer.appendChild(accountEl);
+            }
+
+            if (isPhantomMode) {
+                 const richClientsCount = Object.values(state.dataItems).filter(item => item.value > 450).length;
+                 queryContainer.innerHTML = `
+                    <div class="bg-slate-50 p-6 rounded-lg shadow-inner h-full">
+                         <h3 class="text-xl font-bold text-slate-800">Consulta de Clientes Ricos</h3>
+                         <p class="text-sm text-slate-500 italic">SELECT COUNT(*) WHERE saldo > 450</p>
+                         <p class="text-3xl font-light text-purple-700 mt-2">${richClientsCount} <span class="text-lg">clientes</span></p>
+                    </div>
+                 `;
             }
         }
 
@@ -398,7 +488,9 @@
 
                 let localValueInfo = '';
                 if(t.localValue !== null) {
-                    localValueInfo = `<div class="text-sm text-slate-500 mt-1">Valor lido localmente: R$ ${t.localValue.toFixed(2)}</div>`;
+                    const label = (state.simMode === SimMode.PHANTOM_READ) ? 'Contagem local' : 'Valor lido localmente';
+                    const unit = (state.simMode === SimMode.PHANTOM_READ) ? '' : 'R$ ';
+                    localValueInfo = `<div class="text-sm text-slate-500 mt-1">${label}: ${unit}${t.localValue.toFixed(0)}</div>`;
                 }
 
                 let errorInfo = '';
@@ -458,6 +550,14 @@
                         buttons += `<button data-t-name="${t.name}" data-action="update_commit" class="w-full bg-${t.color}-200 text-${t.color}-800 hover:bg-${t.color}-300 btn-secondary">Update & Commit Saldo C</button>`;
                     }
                     break;
+                case SimMode.PHANTOM_READ:
+                    if (t.name === 'T1') {
+                        buttons += `<button data-t-name="${t.name}" data-action="count1" class="w-full bg-${t.color}-200 text-${t.color}-800 hover:bg-${t.color}-300 btn-secondary">1ª Contagem Clientes Ricos</button>`;
+                        buttons += `<button data-t-name="${t.name}" data-action="count2" class="w-full bg-${t.color}-200 text-${t.color}-800 hover:bg-${t.color}-300 btn-secondary">2ª Contagem Clientes Ricos</button>`;
+                    } else {
+                        buttons += `<button data-t-name="${t.name}" data-action="make_rich_commit" class="w-full bg-${t.color}-200 text-${t.color}-800 hover:bg-${t.color}-300 btn-secondary">Tornar Conta P 'Rica' & Commit</button>`;
+                    }
+                    break;
             }
             
             return buttons.replaceAll('btn"', 'btn text-white font-bold py-2 px-4 rounded-lg shadow disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"');
@@ -469,10 +569,7 @@
                 const canOperate = t.state === T_State.ACTIVE && !t.pendingOp;
 
                 if (t.hasError) {
-                    document.querySelectorAll(`[data-t-name="${t.name}"]`).forEach(btn => {
-                        if (btn.dataset.action !== 'start') btn.disabled = true;
-                    });
-                     document.querySelector(`[data-t-name="${t.name}"][data-action="start"]`).disabled = true;
+                    document.querySelectorAll(`[data-t-name="${t.name}"] button`).forEach(btn => btn.disabled = true);
                     return;
                 }
                 
@@ -480,7 +577,7 @@
                 document.querySelector(`[data-t-name="${t.name}"][data-action="commit"]`).disabled = !isActive;
                 document.querySelector(`[data-t-name="${t.name}"][data-action="abort"]`).disabled = !isActive;
                 
-                const actions = ['transfer', 'read', 'deposit', 'update_no_commit', 'read1', 'read2', 'update_commit'];
+                const actions = ['transfer', 'read', 'deposit', 'update_no_commit', 'read1', 'read2', 'update_commit', 'count1', 'count2', 'make_rich_commit'];
                 actions.forEach(action => {
                     const btn = document.querySelector(`[data-t-name="${t.name}"][data-action="${action}"]`);
                     if(btn) btn.disabled = !canOperate;
@@ -515,6 +612,7 @@
                         READ: { icon: 'fa-eye', text: `Read(${op.details})`, color: 'bg-blue-400' },
                         WRITE: { icon: 'fa-pencil-alt', text: `Write(${op.details})`, color: 'bg-yellow-500' },
                         UPDATE: { icon: 'fa-edit', text: `Update(${op.details})`, color: 'bg-yellow-500' },
+                        QUERY: { icon: 'fa-search', text: `Count(${op.details})`, color: 'bg-purple-400' },
                         LOCK: { icon: 'fa-lock', text: `Lock(${op.details})`, color: 'bg-indigo-500' },
                         WAIT: { icon: 'fa-clock', text: `Wait(${op.details})`, color: 'bg-orange-500' },
                         COMMIT: { icon: 'fa-check', text: 'Commit', color: 'bg-green-500' },
@@ -624,6 +722,32 @@
                     logOperation(t, 'UPDATE', 'C');
                     logOperation(t, 'COMMIT');
                     t.state = T_State.COMMITTED;
+                },
+                // Phantom Read
+                count1: () => {
+                    t.localValue = Object.values(state.dataItems).filter(item => item.value > 450).length;
+                    log(`${t.name} (1ª Contagem) encontrou ${t.localValue} clientes ricos.`, t.color);
+                    logOperation(t, 'QUERY', '>450');
+                },
+                count2: () => {
+                    const currentCount = Object.values(state.dataItems).filter(item => item.value > 450).length;
+                    log(`${t.name} (2ª Contagem) encontrou ${currentCount} clientes ricos.`, t.color);
+                    if (currentCount !== t.localValue) {
+                        t.hasError = true;
+                        log(`ERRO DE LEITURA FANTASMA! A contagem mudou de ${t.localValue} para ${currentCount}.`, 'red');
+                    }
+                    logOperation(t, 'QUERY', '>450');
+                },
+                make_rich_commit: () => {
+                    if (state.dataItems['Conta P'].value <= 450) {
+                        state.dataItems['Conta P'].value = 600; // Torna a conta 'rica'
+                        log(`${t.name} tornou a Conta P 'rica' (saldo R$ 600.00) e commitou.`, t.color);
+                        logOperation(t, 'UPDATE', 'P');
+                        logOperation(t, 'COMMIT');
+                        t.state = T_State.COMMITTED;
+                    } else {
+                        log(`${t.name} não fez nada pois Conta P já é 'rica'.`, t.color);
+                    }
                 }
             };
             
@@ -695,9 +819,11 @@
              }
              if (state.simMode === SimMode.DIRTY_READ && t.name === 'T1') {
                 const originalValue = state.dataItems['Conta C'].value;
-                state.dataItems['Conta C'].tempValue = originalValue;
+                const dirtyValue = state.dataItems['Conta C'].tempValue;
+                state.dataItems['Conta C'].tempValue = originalValue; // Reverte o valor temporário
+
                 const t2 = state.transactions.find(tr => tr.name === 'T2');
-                if (t2.localValue !== null && t2.localValue !== originalValue) {
+                if (t2.localValue !== null && t2.localValue === dirtyValue) {
                     t2.hasError = true;
                     log(`ERRO DE LEITURA SUJA! T2 leu R$ ${t2.localValue.toFixed(2)}, mas o valor foi revertido para R$ ${originalValue.toFixed(2)}.`, 'red');
                 }
